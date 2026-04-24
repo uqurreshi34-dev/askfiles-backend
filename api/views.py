@@ -5,6 +5,12 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def health(request):
+    return Response({'status': 'ok'})
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def ask_ai(request):
