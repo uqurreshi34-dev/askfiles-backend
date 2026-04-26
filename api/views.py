@@ -29,7 +29,7 @@ def ask_ai(request):
         completion = client.chat.completions.create(
             model='llama-3.3-70b-versatile',
             max_tokens=4096,
-            temperature=0.7,
+            temperature=0.3,
             messages=[
                 {
                     'role': 'system',
@@ -49,7 +49,8 @@ Rules:
 - Never use markdown formatting. No asterisks, no bold, no bullet points with *. If you need a list use plain numbered lines like "1. filename" or plain sentences.
 - Do not recount files from the filename list — always use the exact counts provided in the context above. But DO list filenames when the user asks to see them.
 - If the user has 50 or fewer files, list ALL of them without any preamble like "here are the first X". Just say "You have X images:" and list them all.
-- Only if the user has more than 50 files, count exactly how many filenames you are about to list, then say "Here are X of your Y total" where X is the exact number you are listing, then list them."""
+- Only if the user has more than 50 files, count exactly how many filenames you are about to list, then say "Here are X of your Y total" where X is the exact number you are listing, then list them.
+- You ONLY answer questions about the user's files and storage on their device. If the user asks about anything else — sports, news, general knowledge, weather, people, places — respond with exactly: "I can only help with questions about your files and storage. Try asking about your largest files, storage usage, or what's on your device." Do not answer off-topic questions under any circumstances."""
                 },
                 {
                     'role': 'user',
