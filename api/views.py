@@ -11,9 +11,14 @@ def health(request):
     return Response({'status': 'ok'})
 
 
+API_KEY = os.getenv('ASKFILES_API_KEY')
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def ask_ai(request):
+    if API_KEY and request.headers.get('X-API-Key') != API_KEY:
+        return Response({'error': 'Unauthorized'}, status=401)
     question = request.data.get('question', '').strip()
     context = request.data.get('context', '').strip()
 
