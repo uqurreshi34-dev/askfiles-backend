@@ -12,7 +12,7 @@ def health(request):
 
 
 API_KEY = os.getenv('ASKFILES_API_KEY')
-WORKER_URL = 'https://groq-proxy.u-qurreshi34.workers.dev'
+WORKER_URL = os.getenv('WORKER_URL')
 
 
 @api_view(['POST'])
