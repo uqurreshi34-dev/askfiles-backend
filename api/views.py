@@ -1,5 +1,5 @@
 import os
-from groq import Groq
+import requests as http_requests
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -12,6 +12,7 @@ def health(request):
 
 
 API_KEY = os.getenv('ASKFILES_API_KEY')
+WORKER_URL = 'https://groq-proxy.u-qurreshi34.workers.dev'
 
 
 @api_view(['POST'])
@@ -25,20 +26,17 @@ def ask_ai(request):
     if not question:
         return Response({'error': 'Question is required'}, status=400)
 
-    api_key = os.getenv('GROQ_API_KEY')
-    if not api_key:
-        return Response({'error': 'AI not configured'}, status=500)
-
     try:
-        client = Groq(api_key=api_key)
-        completion = client.chat.completions.create(
-            model='llama-3.3-70b-versatile',
-            max_tokens=4096,
-            temperature=0.3,
-            messages=[
-                {
-                    'role': 'system',
-                    'content': f"""You are AskFiles AI, a helpful file manager assistant built into the AskFiles app.
+        worker_response = http_requests.post(
+            WORKER_URL,
+            json={
+                'model': 'llama-3.3-70b-versatile',
+                'max_tokens': 4096,
+                'temperature': 0.3,
+                'messages': [
+                    {
+                        'role': 'system',
+                        'content': f"""You are AskFiles AI, a helpful file manager assistant built into the AskFiles app.
 The user's device file context is below. Read it carefully before answering.
 
 {context}
@@ -57,14 +55,17 @@ Rules:
 - Never use markdown formatting. No asterisks, no bold, no bullet points with *. If you need a list use plain numbered lines like "1. filename" or plain sentences.
 - 'Other' storage represents system and app data the user cannot access or manage. Never mention it when answering questions about largest files or folders.
 - You ONLY answer questions about the user's files and storage on their device. If the user asks about anything else — sports, news, general knowledge, weather, people, places — respond with exactly: "I can only help with questions about your files and storage. Try asking about your largest files, storage usage, or what's on your device." Do not answer off-topic questions under any circumstances."""
-                },
-                {
-                    'role': 'user',
-                    'content': question
-                }
-            ]
+                    },
+                    {
+                        'role': 'user',
+                        'content': question
+                    }
+                ]
+            },
+            timeout=30
         )
-        answer = completion.choices[0].message.content
+        result = worker_response.json()
+        answer = result['choices'][0]['message']['content']
         return Response({'answer': answer})
 
     except Exception as e:
