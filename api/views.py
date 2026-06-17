@@ -1,5 +1,4 @@
 import os
-import json
 import requests as http_requests
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
@@ -73,36 +72,3 @@ Rules:
     except Exception as e:
         print(f'Groq error: {e}')
         return Response({'error': 'AI unavailable. Try again.'}, status=500)
-
-
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def expand_query(request):
-    if API_KEY and request.headers.get('X-API-Key') != API_KEY:
-        return Response({'error': 'Unauthorized'}, status=401)
-    query = request.data.get('query', '').strip()
-    if not query:
-        return Response({'keywords': []})
-    try:
-        worker_response = http_requests.post(
-            WORKER_URL,
-            json={
-                'model': 'llama-3.1-8b-instant',
-                'max_tokens': 100,
-                'temperature': 0.2,
-                'messages': [{
-                    'role': 'user',
-                    'content': f'The user wants to find documents about: "{query}". Return ONLY a JSON array of 8 search keywords that would appear inside such documents. Single words only. No explanation. Example: ["prescription","diagnosis","NHS","medication","GP","hospital","clinic","pharmacy"]'
-                }]
-            },
-            timeout=15
-        )
-        result = worker_response.json()
-        raw = result['choices'][0]['message']['content'].strip()
-        raw = raw.replace('```json', '').replace('```', '').strip()
-        keywords = json.loads(raw)
-        if isinstance(keywords, list):
-            return Response({'keywords': [str(k) for k in keywords[:8]]})
-    except Exception as e:
-        print(f'expand_query error: {e}')
-    return Response({'keywords': []})
