@@ -1,3 +1,6 @@
+import os
+import secrets
+
 from django.http import HttpResponse
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
@@ -9,9 +12,29 @@ from .jarvis_service import JarvisServiceError, audio_bytes, organise
 MAX_TTS_CHARS = 2000
 
 
+def _check_access(request):
+    expected = (os.getenv("JARVIS_SERVICE_KEY") or "").strip()
+    supplied = (request.headers.get("X-JARVIS-Key") or "").strip()
+
+    if not expected:
+        return Response(
+            {"error": "JARVIS Mobile is not configured on the server."},
+            status=503,
+        )
+
+    if not secrets.compare_digest(supplied, expected):
+        return Response({"error": "Unauthorized."}, status=401)
+
+    return None
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def jarvis_organise(request):
+    access_error = _check_access(request)
+    if access_error is not None:
+        return access_error
+
     payload = request.data if isinstance(request.data, dict) else {}
     current_path = str(payload.get("current_path") or "").strip()
     current_folder = str(payload.get("current_folder") or "").strip()
@@ -46,6 +69,10 @@ def jarvis_organise(request):
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def jarvis_audio(request):
+    access_error = _check_access(request)
+    if access_error is not None:
+        return access_error
+
     payload = request.data if isinstance(request.data, dict) else {}
     text = str(payload.get("text") or "").strip()
 
