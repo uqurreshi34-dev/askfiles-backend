@@ -7,10 +7,13 @@ from functools import lru_cache
 from typing import Any
 
 import edge_tts
-from anthropic import Anthropic
+from anthropic import AnthropicFoundry
 
 
-MODEL = os.getenv("JARVIS_MODEL", "claude-opus-5")
+MODEL = os.getenv(
+    "JARVIS_MODEL",
+    os.getenv("ANTHROPIC_FOUNDRY_MODEL", "claude-opus-5"),
+)
 MAX_TOKENS = int(os.getenv("JARVIS_MAX_TOKENS", "3072"))
 EFFORT = (os.getenv("JARVIS_EFFORT", "low") or "low").strip().casefold()
 VOICE = os.getenv("JARVIS_VOICE", "en-GB-RyanNeural")
@@ -217,7 +220,8 @@ def expand_plan(
         if index not in ambiguous and names.get(index) and safe_name(destination)
     ]
 
-    existing = {safe_name(name) for name in existing_child_folders if safe_name(name)}
+    existing = {safe_name(name)
+                for name in existing_child_folders if safe_name(name)}
     create_folders: list[str] = []
 
     for raw_name in plan.get("create_folders") or []:
@@ -253,7 +257,8 @@ def organise(
             f"That folder is too large to organise in one pass (maximum {MAX_ITEMS} items)."
         )
 
-    normalized_path = (current_path or "").replace("\\", "/").rstrip("/").casefold()
+    normalized_path = (current_path or "").replace(
+        "\\", "/").rstrip("/").casefold()
     if normalized_path.endswith("/dcim") or normalized_path.endswith("/dcim/camera"):
         return {
             "summary": "This is a standard Android camera folder, so I will leave its structure intact.",
@@ -279,12 +284,16 @@ def organise(
         separators=(",", ":"),
     )
 
-    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
-    if not api_key:
+    api_key = (os.getenv("ANTHROPIC_FOUNDRY_API_KEY") or "").strip()
+    base_url = (os.getenv("ANTHROPIC_FOUNDRY_BASE_URL") or "").strip()
+    if not api_key or not base_url:
         raise JarvisServiceError("JARVIS is not configured on the server.")
 
     try:
-        response = Anthropic(api_key=api_key).messages.create(
+        response = AnthropicFoundry(
+            api_key=api_key,
+            base_url=base_url,
+        ).messages.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
             messages=[
@@ -297,7 +306,8 @@ def organise(
         )
     except Exception as error:
         print(f"[JARVIS Mobile] organisation request failed: {error}")
-        raise JarvisServiceError("I couldn't plan that folder right now, sir.") from error
+        raise JarvisServiceError(
+            "I couldn't plan that folder right now, sir.") from error
 
     text = next(
         (
@@ -311,10 +321,12 @@ def organise(
     try:
         plan = json.loads(text)
     except json.JSONDecodeError as error:
-        raise JarvisServiceError("JARVIS returned an invalid organisation plan.") from error
+        raise JarvisServiceError(
+            "JARVIS returned an invalid organisation plan.") from error
 
     if not isinstance(plan, dict):
-        raise JarvisServiceError("JARVIS returned an invalid organisation plan.")
+        raise JarvisServiceError(
+            "JARVIS returned an invalid organisation plan.")
 
     return expand_plan(
         plan,
@@ -349,4 +361,5 @@ def audio_bytes(text: str) -> bytes:
         return asyncio.run(_synthesise(normalized))
     except Exception as error:
         print(f"[JARVIS Mobile] voice synthesis failed: {error}")
-        raise JarvisServiceError("JARVIS voice is unavailable right now.") from error
+        raise JarvisServiceError(
+            "JARVIS voice is unavailable right now.") from error

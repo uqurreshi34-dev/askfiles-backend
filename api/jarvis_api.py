@@ -1,39 +1,73 @@
 import os
-import secrets
 
 from django.http import HttpResponse
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token
+
 from .jarvis_service import JarvisServiceError, audio_bytes, organise
 
 
 MAX_TTS_CHARS = 2000
+GOOGLE_WEB_CLIENT_ID = (os.getenv("GOOGLE_WEB_CLIENT_ID") or "").strip()
 
 
-def _check_access(request):
-    expected = (os.getenv("JARVIS_SERVICE_KEY") or "").strip()
-    supplied = (request.headers.get("X-JARVIS-Key") or "").strip()
-
-    if not expected:
-        return Response(
-            {"error": "JARVIS Mobile is not configured on the server."},
+def _authenticated_google_user(request):
+    if not GOOGLE_WEB_CLIENT_ID:
+        return None, Response(
+            {"error": "JARVIS authentication is not configured."},
             status=503,
         )
 
-    if not secrets.compare_digest(supplied, expected):
-        return Response({"error": "Unauthorized."}, status=401)
+    header = (request.headers.get("Authorization") or "").strip()
 
-    return None
+    if not header.startswith("Bearer "):
+        return None, Response(
+            {"error": "Authentication required."},
+            status=401,
+        )
+
+    token = header[7:].strip()
+
+    if not token:
+        return None, Response(
+            {"error": "Authentication required."},
+            status=401,
+        )
+
+    try:
+        claims = id_token.verify_oauth2_token(
+            token,
+            google_requests.Request(),
+            audience=GOOGLE_WEB_CLIENT_ID,
+        )
+    except Exception:
+        return None, Response(
+            {"error": "Invalid or expired authentication token."},
+            status=401,
+        )
+
+    subject = str(claims.get("sub") or "").strip()
+
+    if not subject:
+        return None, Response(
+            {"error": "Invalid authentication token."},
+            status=401,
+        )
+
+    return claims, None
 
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def jarvis_organise(request):
-    access_error = _check_access(request)
-    if access_error is not None:
-        return access_error
+    _, auth_error = _authenticated_google_user(request)
+
+    if auth_error is not None:
+        return auth_error
 
     payload = request.data if isinstance(request.data, dict) else {}
     current_path = str(payload.get("current_path") or "").strip()
@@ -69,9 +103,10 @@ def jarvis_organise(request):
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def jarvis_audio(request):
-    access_error = _check_access(request)
-    if access_error is not None:
-        return access_error
+    _, auth_error = _authenticated_google_user(request)
+
+    if auth_error is not None:
+        return auth_error
 
     payload = request.data if isinstance(request.data, dict) else {}
     text = str(payload.get("text") or "").strip()
