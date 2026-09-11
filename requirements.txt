@@ -1,5 +1,6 @@
 annotated-types==0.7.0
 anyio==4.13.0
+anthropic==1.5.0
 asgiref==3.11.1
 certifi==2026.4.22
 charset-normalizer==3.4.7
@@ -7,6 +8,7 @@ distro==1.9.0
 Django==6.0.4
 django-cors-headers==4.9.0
 djangorestframework==3.17.1
+edge-tts==7.2.8
 groq==1.2.0
 gunicorn==25.3.0
 h11==0.16.0
