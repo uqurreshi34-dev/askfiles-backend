@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from functools import lru_cache
 from typing import Any
 
@@ -32,7 +33,7 @@ SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "match": {"type": "string", "enum": ["extension", "prefix"]},
+                    "match": {"type": "string", "enum": ["extension", "prefix", "contains"]},
                     "values": {"type": "array", "items": {"type": "string"}},
                     "destination": {"type": "string"},
                 },
@@ -79,8 +80,10 @@ Rules:
 
 Compact planning:
 - Prefer extension rules for common file types.
-- Use prefix rules when filenames identify a narrower group such as screenshots or scan exports.
-- Prefix rules override extension rules.
+- Use contains rules when a word anywhere in the filename identifies a group, such as screenshots or scan exports. 
+- Matching is by whole word, so "scan" matches "IMG_scan_01.pdf" and not "Scandinavia.jpg".
+- Use prefix rules only when the group is genuinely identified by how the name starts.
+- Name rules (contains and prefix) override extension rules.
 - Use exceptions only when a file genuinely needs individual treatment.
 - Never create one exception per ordinary file when a rule can cover it.
 - Use at most 300 exception indices.
@@ -89,6 +92,35 @@ Compact planning:
 The backend expands the compact rules into individual file moves locally.
 Do not return individual filename-based move objects.
 """
+
+# DCIM is indexed by MediaStore: move files out of it and they vanish from
+# every gallery on the phone, and from "recent" in other apps. Android/data
+# and Android/obb are app-private, usually not writable, and breaking them
+# breaks the app that owns them. browse.tsx already skips /Android/data for
+# folder counts; the organiser was never told.
+PROTECTED_PATHS = (
+    "/dcim",
+    "/dcim/camera",
+    "/android",
+    "/android/data",
+    "/android/obb",
+)
+
+
+def words_in(name: str) -> set[str]:
+    """The words in a filename, ignoring its extension and separators.
+
+    Whole words, not raw containment: "IMG_scan_01.pdf" is a scan and
+    "Scandinavia.jpg" is not.
+    """
+    dot = name.rfind(".")
+    stem = name[:dot] if dot > 0 else name
+
+    return {
+        word
+        for word in re.split(r"[^A-Za-z0-9]+", stem.casefold())
+        if word
+    }
 
 
 class JarvisServiceError(Exception):
@@ -178,16 +210,36 @@ def expand_plan(
             if prefix and len(prefix) <= MAX_NAME_LENGTH and "/" not in prefix and "\\" not in prefix:
                 prefix_rules.append((prefix.casefold(), destination))
 
+    contains_rules: list[tuple[str, str]] = []
+
+    for rule in plan.get("rules") or []:
+        if not isinstance(rule, dict) or rule.get("match") != "contains":
+            continue
+        destination = safe_name(rule.get("destination"))
+        if not destination:
+            continue
+        for raw in rule.get("values") or []:
+            word = str(raw or "").strip()
+            if word and len(word) <= MAX_NAME_LENGTH and "/" not in word and "\\" not in word:
+                contains_rules.append((word.casefold(), destination))
+
     for index, name in names.items():
-        prefix_destinations = {
+        words = words_in(name)
+
+        name_destinations = {
             destination
             for prefix, destination in prefix_rules
             if name.casefold().startswith(prefix)
+        } | {
+            destination
+            for word, destination in contains_rules
+            if word in words
         }
-        if len(prefix_destinations) == 1:
-            assigned[index] = next(iter(prefix_destinations))
+
+        if len(name_destinations) == 1:
+            assigned[index] = next(iter(name_destinations))
             continue
-        if len(prefix_destinations) > 1:
+        if len(name_destinations) > 1:
             ambiguous.add(index)
             continue
         destination = extension_destinations.get(extensions.get(index, ""))
@@ -214,23 +266,51 @@ def expand_plan(
             ambiguous.discard(raw_index)
             exception_count += 1
 
+    # Folder names are compared without case, so an existing "Images" is
+    # reused rather than "images" being created beside it. On a FAT or exFAT
+    # SD card the two collide outright; on internal storage you simply end
+    # up with both, which is what was happening.
+    existing_by_key: dict[str, str] = {}
+
+    for raw_name in existing_child_folders:
+        name = safe_name(raw_name)
+
+        if name:
+            existing_by_key.setdefault(name.casefold(), name)
+
+    for name in directories:
+        safe = safe_name(name)
+
+        if safe:
+            existing_by_key.setdefault(safe.casefold(), safe)
+
     moves = [
-        {"file": names[index], "destination": destination}
+        {
+            "file": names[index],
+            # An existing folder keeps its own spelling.
+            "destination": existing_by_key.get(
+                destination.casefold(), destination
+            ),
+        }
         for index, destination in assigned.items()
         if index not in ambiguous and names.get(index) and safe_name(destination)
     ]
 
-    existing = {safe_name(name)
-                for name in existing_child_folders if safe_name(name)}
     create_folders: list[str] = []
 
     for raw_name in plan.get("create_folders") or []:
         name = safe_name(raw_name)
-        if name and name not in existing and name not in create_folders:
+        if (
+            name
+            and name.casefold() not in existing_by_key
+            and name not in create_folders
+        ):
             create_folders.append(name)
 
     for destination in sorted({move["destination"] for move in moves}):
-        if destination not in existing and destination not in create_folders:
+        if destination.casefold() in existing_by_key:
+            continue
+        if destination not in create_folders:
             create_folders.append(destination)
 
     create_folders = [
@@ -259,9 +339,12 @@ def organise(
 
     normalized_path = (current_path or "").replace(
         "\\", "/").rstrip("/").casefold()
-    if normalized_path.endswith("/dcim") or normalized_path.endswith("/dcim/camera"):
+    if any(
+        normalized_path.endswith(guard) or f"{guard}/" in normalized_path
+        for guard in PROTECTED_PATHS
+    ):
         return {
-            "summary": "This is a standard Android camera folder, so I will leave its structure intact.",
+            "summary": "This is a standard Android folder, so I will leave its structure intact.",
             "moves": [],
             "create_folders": [],
         }
