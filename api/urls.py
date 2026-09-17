@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import ask_ai, health
-from .jarvis_api import jarvis_audio, jarvis_organise
+from .jarvis_api import jarvis_organise
 
 urlpatterns = [
     path('ask-ai/', ask_ai),
