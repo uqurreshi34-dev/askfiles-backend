@@ -7,7 +7,6 @@ import re
 from functools import lru_cache
 from typing import Any
 
-import edge_tts
 from anthropic import AnthropicFoundry
 
 
@@ -17,9 +16,6 @@ MODEL = os.getenv(
 )
 MAX_TOKENS = int(os.getenv("JARVIS_MAX_TOKENS", "3072"))
 EFFORT = (os.getenv("JARVIS_EFFORT", "low") or "low").strip().casefold()
-VOICE = os.getenv("JARVIS_VOICE", "en-GB-RyanNeural")
-VOICE_RATE = os.getenv("JARVIS_VOICE_RATE", "-7%")
-VOICE_PITCH = os.getenv("JARVIS_VOICE_PITCH", "-4Hz")
 MAX_ITEMS = 5000
 MAX_EXCEPTIONS = 300
 MAX_NAME_LENGTH = 512
@@ -419,30 +415,3 @@ def organise(
         directories,
         existing_child_folders,
     )
-
-
-async def _synthesise(text: str) -> bytes:
-    communicate = edge_tts.Communicate(
-        text,
-        VOICE,
-        rate=VOICE_RATE,
-        pitch=VOICE_PITCH,
-    )
-    audio = bytearray()
-    async for chunk in communicate.stream():
-        if chunk.get("type") == "audio":
-            audio.extend(chunk.get("data") or b"")
-    return bytes(audio)
-
-
-@lru_cache(maxsize=128)
-def audio_bytes(text: str) -> bytes:
-    normalized = (text or "").strip()
-    if not normalized:
-        return b""
-    try:
-        return asyncio.run(_synthesise(normalized))
-    except Exception as error:
-        print(f"[JARVIS Mobile] voice synthesis failed: {error}")
-        raise JarvisServiceError(
-            "JARVIS voice is unavailable right now.") from error

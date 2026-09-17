@@ -8,7 +8,7 @@ from rest_framework.response import Response
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 
-from .jarvis_service import JarvisServiceError, audio_bytes, organise
+from .jarvis_service import JarvisServiceError, organise
 
 
 MAX_TTS_CHARS = 2000
@@ -98,38 +98,3 @@ def jarvis_organise(request):
         )
 
     return Response(plan)
-
-
-@api_view(["POST"])
-@permission_classes([AllowAny])
-def jarvis_audio(request):
-    _, auth_error = _authenticated_google_user(request)
-
-    if auth_error is not None:
-        return auth_error
-
-    payload = request.data if isinstance(request.data, dict) else {}
-    text = str(payload.get("text") or "").strip()
-
-    if not text:
-        return Response({"error": "Nothing to say."}, status=400)
-
-    if len(text) > MAX_TTS_CHARS:
-        return Response({"error": "That reply is too long to speak."}, status=400)
-
-    try:
-        data = audio_bytes(text)
-    except JarvisServiceError as error:
-        return Response({"error": str(error)}, status=503)
-    except Exception as error:
-        print(f"[JARVIS Mobile] audio endpoint failed: {error}")
-        return Response({"error": "JARVIS voice is unavailable right now."}, status=503)
-
-    if not data:
-        return Response({"error": "No audio."}, status=503)
-
-    return HttpResponse(
-        data,
-        content_type="audio/mpeg",
-        headers={"Cache-Control": "no-store"},
-    )

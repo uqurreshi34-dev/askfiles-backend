@@ -6,5 +6,4 @@ urlpatterns = [
     path('ask-ai/', ask_ai),
     path('health/', health),
     path('jarvis/organise/', jarvis_organise),
-    path('jarvis/audio/', jarvis_audio),
 ]
