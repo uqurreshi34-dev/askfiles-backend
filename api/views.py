@@ -66,6 +66,17 @@ Rules:
             timeout=30
         )
         result = worker_response.json()
+
+        if worker_response.status_code != 200 or 'choices' not in result:
+            # Without this the only symptom is KeyError('choices'), which
+            # says the key was missing, not what arrived instead.
+            print(
+                f'Worker returned {worker_response.status_code}: '
+                f'{str(result)[:500]}'
+            )
+
+            return Response({'error': 'AI unavailable. Try again.'}, status=500)
+
         answer = result['choices'][0]['message']['content']
         return Response({'answer': answer})
 
