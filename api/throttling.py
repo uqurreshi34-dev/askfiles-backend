@@ -22,22 +22,28 @@ from ipaddress import ip_address
 from rest_framework.throttling import BaseThrottle, SimpleRateThrottle
 
 
+# Set by Cloudflare, which sits in front of every Render service and overwrites any value a
+# caller sends. X-Forwarded-For is not used: Render keeps whatever the caller put in it and
+# adds to the list, so its first entry is whatever the caller chose.
+_CLIENT_HEADERS = ("HTTP_CF_CONNECTING_IP", "HTTP_TRUE_CLIENT_IP")
+
+
 def client_ip(request):
     """The address of whoever sent the request.
 
-    On Render every request arrives through its proxy, so REMOTE_ADDR is the
-    proxy, not the phone. Render puts the real client address first in
-    X-Forwarded-For. Anything that is not a valid IP address falls back to
-    REMOTE_ADDR rather than becoming a key a caller can choose freely.
+    Checked against Render's real headers: a request sent with a made-up X-Forwarded-For
+    still arrived with CF-Connecting-IP set to the sender's true address. Anything that is
+    not a valid IP address falls back to REMOTE_ADDR rather than becoming a key a caller can
+    choose freely.
     """
-    forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    first = forwarded.split(",")[0].strip()
+    for header in _CLIENT_HEADERS:
+        value = request.META.get(header, "").strip()
 
-    if first:
-        try:
-            return str(ip_address(first))
-        except ValueError:
-            pass
+        if value:
+            try:
+                return str(ip_address(value))
+            except ValueError:
+                pass
 
     return request.META.get("REMOTE_ADDR", "") or "unknown"
 
@@ -90,38 +96,3 @@ def global_wait(request, view=None):
     layers = [_Layer(scope, shared=True) for scope in GLOBAL_SCOPES]
     return _first_refusal(layers, request, view)
 
-
-_ADDRESS_HEADERS = ("HTTP_CF_CONNECTING_IP", "HTTP_TRUE_CLIENT_IP", "HTTP_X_REAL_IP")
-
-
-def _kind(value):
-    try:
-        address = ip_address(value.strip())
-    except ValueError:
-        return "not an address"
-    return "private" if address.is_private else "public"
-
-
-def describe_forwarding(request):
-    """Which client-address headers arrived and how they relate, without any address itself.
-
-    Used to learn how Render builds these headers, so the per-client limit can key on the one
-    a caller cannot write. Only shapes are logged: counts, public or private, and which entry
-    of X-Forwarded-For another header matches.
-    """
-    forwarded = [part.strip() for part in request.META.get("HTTP_X_FORWARDED_FOR", "").split(",") if part.strip()]
-    parts = [f"x-forwarded-for={len(forwarded)} entries [{', '.join(_kind(p) for p in forwarded)}]"]
-
-    for key in _ADDRESS_HEADERS:
-        name = key[5:].lower().replace("_", "-")
-        value = request.META.get(key, "").strip()
-        if not value:
-            parts.append(f"{name}=absent")
-        elif value in forwarded:
-            positions = [str(i + 1) for i, p in enumerate(forwarded) if p == value]
-            parts.append(f"{name}=entry {'/'.join(positions)}")
-        else:
-            parts.append(f"{name}=not in x-forwarded-for ({_kind(value)})")
-
-    parts.append(f"remote-addr={_kind(request.META.get('REMOTE_ADDR', ''))}")
-    return "; ".join(parts)

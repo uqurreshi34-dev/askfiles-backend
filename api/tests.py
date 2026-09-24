@@ -43,7 +43,7 @@ class AskAiTests(TestCase):
         self.addCleanup(rate_patch.stop)
 
     def post(self, body=None, key=KEY, ip='203.0.113.5'):
-        headers = {'HTTP_X_FORWARDED_FOR': ip}
+        headers = {'HTTP_CF_CONNECTING_IP': ip}
         if key is not None:
             headers['HTTP_X_API_KEY'] = key
         return self.client.post('/api/ask-ai/', body or {'question': 'q', 'context': 'c'},
@@ -138,17 +138,18 @@ class AskAiTests(TestCase):
         for _ in range(20):
             self.assertEqual(self.client.get('/api/health/').status_code, 200)
 
-    def test_forwarding_description_names_shapes_never_addresses(self):
-        from rest_framework.test import APIRequestFactory
-        from .throttling import describe_forwarding
-        request = APIRequestFactory().post('/api/ask-ai/', HTTP_X_FORWARDED_FOR='10.0.0.1, 8.8.8.8',
-                                           HTTP_CF_CONNECTING_IP='8.8.8.8')
-        text = describe_forwarding(request)
-        self.assertIn('x-forwarded-for=2 entries [private, public]', text)
-        self.assertIn('cf-connecting-ip=entry 2', text)
-        self.assertIn('true-client-ip=absent', text)
-        self.assertNotIn('8.8.8.8', text)
-        self.assertNotIn('10.0.0.1', text)
+    @mock.patch('api.views.http_requests.post', return_value=worker_ok())
+    def test_made_up_forwarded_for_cannot_dodge_the_limit(self, worker):
+        # What Render showed: the caller's own X-Forwarded-For entry comes first, while
+        # Cloudflare's CF-Connecting-IP carries the real sender.
+        for i in range(3):
+            self.client.post('/api/ask-ai/', {'question': 'q', 'context': 'c'}, format='json',
+                             HTTP_X_API_KEY=KEY, HTTP_CF_CONNECTING_IP='8.8.8.8',
+                             HTTP_X_FORWARDED_FOR=f'10.0.0.{i}, 8.8.8.8')
+        response = self.client.post('/api/ask-ai/', {'question': 'q', 'context': 'c'}, format='json',
+                                    HTTP_X_API_KEY=KEY, HTTP_CF_CONNECTING_IP='8.8.8.8',
+                                    HTTP_X_FORWARDED_FOR='10.0.0.99, 8.8.8.8')
+        self.assertEqual(response.status_code, 429)
 
     def test_admin_is_gone(self):
         self.assertEqual(self.client.get('/admin/').status_code, 404)

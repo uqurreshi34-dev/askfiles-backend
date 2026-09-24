@@ -8,7 +8,7 @@ from rest_framework.decorators import api_view, permission_classes, throttle_cla
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
-from .throttling import ClientThrottle, describe_forwarding, global_wait
+from .throttling import ClientThrottle, global_wait
 
 
 @api_view(['GET', 'HEAD'])
@@ -59,8 +59,6 @@ def ask_ai(request):
         return Response({'error': 'AI unavailable. Try again.'}, status=503)
 
     if not _key_is_valid(request):
-        # Shapes only, no addresses: which forwarding headers Render sends.
-        print(f'ask-ai unauthorised; {describe_forwarding(request)}')
         return Response({'error': 'Unauthorized'}, status=401)
 
     question, problem = _text_field(request, 'question', settings.ASKFILES_MAX_QUESTION_CHARS)
