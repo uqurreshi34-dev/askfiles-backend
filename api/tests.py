@@ -138,5 +138,17 @@ class AskAiTests(TestCase):
         for _ in range(20):
             self.assertEqual(self.client.get('/api/health/').status_code, 200)
 
+    def test_forwarding_description_names_shapes_never_addresses(self):
+        from rest_framework.test import APIRequestFactory
+        from .throttling import describe_forwarding
+        request = APIRequestFactory().post('/api/ask-ai/', HTTP_X_FORWARDED_FOR='10.0.0.1, 8.8.8.8',
+                                           HTTP_CF_CONNECTING_IP='8.8.8.8')
+        text = describe_forwarding(request)
+        self.assertIn('x-forwarded-for=2 entries [private, public]', text)
+        self.assertIn('cf-connecting-ip=entry 2', text)
+        self.assertIn('true-client-ip=absent', text)
+        self.assertNotIn('8.8.8.8', text)
+        self.assertNotIn('10.0.0.1', text)
+
     def test_admin_is_gone(self):
         self.assertEqual(self.client.get('/admin/').status_code, 404)

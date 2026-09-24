@@ -89,3 +89,39 @@ def global_wait(request, view=None):
     """Spend one unit of the shared budget. Seconds to wait if it is gone."""
     layers = [_Layer(scope, shared=True) for scope in GLOBAL_SCOPES]
     return _first_refusal(layers, request, view)
+
+
+_ADDRESS_HEADERS = ("HTTP_CF_CONNECTING_IP", "HTTP_TRUE_CLIENT_IP", "HTTP_X_REAL_IP")
+
+
+def _kind(value):
+    try:
+        address = ip_address(value.strip())
+    except ValueError:
+        return "not an address"
+    return "private" if address.is_private else "public"
+
+
+def describe_forwarding(request):
+    """Which client-address headers arrived and how they relate, without any address itself.
+
+    Used to learn how Render builds these headers, so the per-client limit can key on the one
+    a caller cannot write. Only shapes are logged: counts, public or private, and which entry
+    of X-Forwarded-For another header matches.
+    """
+    forwarded = [part.strip() for part in request.META.get("HTTP_X_FORWARDED_FOR", "").split(",") if part.strip()]
+    parts = [f"x-forwarded-for={len(forwarded)} entries [{', '.join(_kind(p) for p in forwarded)}]"]
+
+    for key in _ADDRESS_HEADERS:
+        name = key[5:].lower().replace("_", "-")
+        value = request.META.get(key, "").strip()
+        if not value:
+            parts.append(f"{name}=absent")
+        elif value in forwarded:
+            positions = [str(i + 1) for i, p in enumerate(forwarded) if p == value]
+            parts.append(f"{name}=entry {'/'.join(positions)}")
+        else:
+            parts.append(f"{name}=not in x-forwarded-for ({_kind(value)})")
+
+    parts.append(f"remote-addr={_kind(request.META.get('REMOTE_ADDR', ''))}")
+    return "; ".join(parts)
