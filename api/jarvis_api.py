@@ -1,7 +1,7 @@
 import os
 
 from django.http import HttpResponse
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
@@ -9,6 +9,7 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 
 from .jarvis_service import JarvisServiceError, organise
+from .throttling import ClientThrottle, global_wait
 
 
 MAX_TTS_CHARS = 2000
@@ -63,11 +64,16 @@ def _authenticated_google_user(request):
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
+@throttle_classes([ClientThrottle])
 def jarvis_organise(request):
     _, auth_error = _authenticated_google_user(request)
 
     if auth_error is not None:
         return auth_error
+
+    if global_wait(request) is not None:
+        print("[JARVIS Mobile] organise refused: global hourly or daily budget reached")
+        return Response({"error": "JARVIS is busy right now. Try again later."}, status=429)
 
     payload = request.data if isinstance(request.data, dict) else {}
     current_path = str(payload.get("current_path") or "").strip()

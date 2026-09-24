@@ -12,6 +12,10 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 from pathlib import Path
 import os
+import tempfile
+
+from django.core.exceptions import ImproperlyConfigured
+from django.core.management.utils import get_random_secret_key
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -23,13 +27,28 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv('SECRET_KEY')
-
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',')
+# SECURITY WARNING: keep the secret key used in production secret!
+# Production refuses to start without one. Local development gets a fresh
+# random key each run, which is fine because nothing here keeps sessions.
+SECRET_KEY = (os.getenv('SECRET_KEY') or '').strip()
+if not SECRET_KEY:
+    if not DEBUG:
+        raise ImproperlyConfigured('SECRET_KEY must be set when DEBUG is off.')
+    SECRET_KEY = get_random_secret_key()
+
+# Only names this server really answers to. Render sets
+# RENDER_EXTERNAL_HOSTNAME to the public name automatically; ALLOWED_HOSTS can
+# add more (a custom domain), comma separated. localhost stays in because
+# Render's own health check calls the service as localhost.
+ALLOWED_HOSTS = ['localhost', '127.0.0.1']
+_render_host = (os.getenv('RENDER_EXTERNAL_HOSTNAME') or '').strip()
+if _render_host:
+    ALLOWED_HOSTS.append(_render_host)
+ALLOWED_HOSTS += [h.strip() for h in os.getenv('ALLOWED_HOSTS', '').split(',')
+                  if h.strip() and h.strip() != '*']
 
 
 # Application definition
@@ -127,4 +146,44 @@ STATIC_URL = 'static/'
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = []
 
-GROQ_API_KEY = os.getenv('GROQ_API_KEY', '')
+
+# HTTPS. Render ends TLS at its proxy and passes the original scheme in
+# X-Forwarded-Proto, so Django is told to trust that header. No redirect here:
+# Render already sends http to https, and its health check calls plain http.
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000
+
+
+# Request counters for the rate limits. Kept on disk rather than in memory so
+# every gunicorn worker shares one count. Render's disk is wiped on restart,
+# which only resets the counters.
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.filebased.FileBasedCache',
+        'LOCATION': os.getenv('THROTTLE_CACHE_DIR',
+                              os.path.join(tempfile.gettempdir(), 'askfiles-throttle')),
+        'OPTIONS': {'MAX_ENTRIES': 10000},
+    }
+}
+
+# Every rate is tunable on Render without a code change. The per-client ones
+# sit far above what anyone using the app can reach; the global ones are the
+# cost cap across all users together.
+REST_FRAMEWORK = {
+    'EXCEPTION_HANDLER': 'api.exceptions.api_exception_handler',
+    'DEFAULT_THROTTLE_RATES': {
+        'ai_client_burst': os.getenv('AI_RATE_CLIENT_BURST', '10/min'),
+        'ai_client_hour': os.getenv('AI_RATE_CLIENT_HOUR', '120/hour'),
+        'ai_client_day': os.getenv('AI_RATE_CLIENT_DAY', '500/day'),
+        'ai_global_hour': os.getenv('AI_RATE_GLOBAL_HOUR', '1000/hour'),
+        'ai_global_day': os.getenv('AI_RATE_GLOBAL_DAY', '5000/day'),
+    },
+}
+
+# Largest question and device context ask-ai accepts. The app's context is a
+# summary plus a few dozen file names, well under the default.
+ASKFILES_MAX_QUESTION_CHARS = int(os.getenv('ASKFILES_MAX_QUESTION_CHARS', '1000'))
+ASKFILES_MAX_CONTEXT_CHARS = int(os.getenv('ASKFILES_MAX_CONTEXT_CHARS', '32000'))
