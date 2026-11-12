@@ -27,6 +27,24 @@ _CONTEXT_TAG = 'device_context'
 _TAG_PATTERN = re.compile(rf'</?\s*{_CONTEXT_TAG}\s*>', re.IGNORECASE)
 
 
+# The app's chosen language. Anything else, or nothing (older app
+# versions), means English, so the field can never be used to inject text.
+_LANGUAGES = {'en': 'English', 'ar': 'Arabic', 'hi': 'Hindi'}
+
+# The off-topic reply, word for word, in each language. Kept here rather
+# than left to the model so it never wanders.
+_OFF_TOPIC = {
+    'en': "I can only help with questions about your files and storage. Try asking about your largest files, storage usage, or what's on your device.",
+    'ar': 'يمكنني المساعدة فقط في الأسئلة المتعلقة بملفاتك ومساحة التخزين. جرّب السؤال عن أكبر ملفاتك أو استخدام التخزين أو ما يوجد على جهازك.',
+    'hi': 'मैं केवल आपकी फ़ाइलों और स्टोरेज से जुड़े सवालों में मदद कर सकता हूँ। अपनी सबसे बड़ी फ़ाइलों, स्टोरेज के इस्तेमाल या अपने डिवाइस पर मौजूद चीज़ों के बारे में पूछकर देखें।',
+}
+
+
+def _language(request):
+    value = request.data.get('language', 'en') if hasattr(request.data, 'get') else 'en'
+    return value if isinstance(value, str) and value in _LANGUAGES else 'en'
+
+
 def _key_is_valid(request):
     sent = (request.headers.get('X-API-Key') or '').strip()
     # Constant time, so the key cannot be found one character at a time.
@@ -72,6 +90,8 @@ def ask_ai(request):
     if not question:
         return Response({'error': 'Question is required'}, status=400)
 
+    language = _language(request)
+
     wait = global_wait(request)
     if wait is not None:
         print('ask-ai refused: global hourly or daily budget reached')
@@ -98,11 +118,12 @@ Rules:
 - When answering "what's my largest file", always use the "Top 10 largest files across all storage" list provided in the context — not the per-category lists.
 - PNG, JPG, JPEG, HEIC, GIF, WEBP are ALL image formats. Never add notes like "(this is actually a jpg)" or "(included as it is an image)" — jpg IS an image, treat it as such with zero comment.
 - MP4, MKV, AVI, MOV, WEBM are ALL video formats. Never add notes like "(this is actually a video)" — treat them as videos with zero comment. Never call a video an image.
+- Reply in {_LANGUAGES[language]}, whatever language the question is written in. Keep file names, folder paths, sizes and file extensions exactly as they appear in the context — never translate or transliterate them.
 - Keep answers short and practical — 3-4 sentences max unless a list is genuinely needed.
 - Do not make up files that aren't in the context.
 - Never use markdown formatting. No asterisks, no bold, no bullet points with *. If you need a list use plain numbered lines like "1. filename" or plain sentences.
 - 'Other' storage represents system and app data the user cannot access or manage. Never mention it when answering questions about largest files or folders.
-- You ONLY answer questions about the user's files and storage on their device. If the user asks about anything else — sports, news, general knowledge, weather, people, places — respond with exactly: "I can only help with questions about your files and storage. Try asking about your largest files, storage usage, or what's on your device." Do not answer off-topic questions under any circumstances."""
+- You ONLY answer questions about the user's files and storage on their device. If the user asks about anything else — sports, news, general knowledge, weather, people, places — respond with exactly: "{_OFF_TOPIC[language]}" Do not answer off-topic questions under any circumstances."""
                     },
                     {
                         'role': 'user',
