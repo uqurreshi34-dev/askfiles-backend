@@ -1,3 +1,4 @@
+import os
 from unittest import mock
 
 from django.core.cache import cache
@@ -36,6 +37,14 @@ class AskAiTests(TestCase):
         patcher = mock.patch('api.views.API_KEY', KEY)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # Groq through the Worker only, unless a test adds the others.
+        env = mock.patch.dict(os.environ, {'WORKER_URL': 'https://worker.test'})
+        env.start()
+        self.addCleanup(env.stop)
+        for name in ('GEMINI_API_KEY', 'DEEPSEEK_API_KEY'):
+            os.environ.pop(name, None)
+        from api import llm
+        llm._resting_until.clear()
         # DRF reads throttle rates once at import; point it at the test rates.
         from rest_framework.throttling import SimpleRateThrottle
         rate_patch = mock.patch.object(SimpleRateThrottle, 'THROTTLE_RATES', RATES)
@@ -189,3 +198,77 @@ class AskAiTests(TestCase):
 
     def test_admin_is_gone(self):
         self.assertEqual(self.client.get('/admin/').status_code, 404)
+
+
+def failed(status=500, text='upstream error'):
+    response = mock.Mock(status_code=status, text=text)
+    response.json.return_value = {'error': text}
+    return response
+
+
+@override_settings(REST_FRAMEWORK=rates())
+class FailoverTests(AskAiTests):
+    """Groq (Worker) first, then Gemini, then DeepSeek, as JARVIS."""
+
+    def setUp(self):
+        super().setUp()
+        env = mock.patch.dict(os.environ, {'GEMINI_API_KEY': 'g-key', 'DEEPSEEK_API_KEY': 'd-key'})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def urls(self, post):
+        return [c.args[0] for c in post.call_args_list]
+
+    @mock.patch('api.views.http_requests.post')
+    def test_groq_answers_first_and_others_are_not_called(self, post):
+        post.return_value = worker_ok('from groq')
+        response = self.post()
+        self.assertEqual(response.data, {'answer': 'from groq'})
+        self.assertEqual(self.urls(post), ['https://worker.test'])
+
+    @mock.patch('api.views.http_requests.post')
+    def test_groq_failing_falls_back_to_gemini(self, post):
+        post.side_effect = [failed(500), worker_ok('from gemini')]
+        response = self.post()
+        self.assertEqual(response.data, {'answer': 'from gemini'})
+        self.assertIn('generativelanguage.googleapis.com', self.urls(post)[1])
+        self.assertEqual(post.call_args_list[1].kwargs['headers'], {'Authorization': 'Bearer g-key'})
+
+    @mock.patch('api.views.http_requests.post')
+    def test_timeout_then_quota_reaches_deepseek_without_thinking(self, post):
+        import requests
+        post.side_effect = [requests.Timeout('slow'), failed(429, 'quota exceeded'), worker_ok('from deepseek')]
+        response = self.post()
+        self.assertEqual(response.data, {'answer': 'from deepseek'})
+        body = post.call_args_list[2].kwargs['json']
+        self.assertIn('api.deepseek.com', self.urls(post)[2])
+        self.assertEqual(body['thinking'], {'type': 'disabled'})
+
+    @mock.patch('api.views.http_requests.post')
+    def test_quota_refusal_rests_the_provider(self, post):
+        post.side_effect = [failed(429, 'rate limit'), worker_ok('from gemini')]
+        self.post()
+        post.reset_mock()
+        post.side_effect = [worker_ok('from gemini again')]
+        response = self.post()
+        self.assertEqual(response.data, {'answer': 'from gemini again'})
+        self.assertNotIn('https://worker.test', self.urls(post))
+
+    @mock.patch('api.views.http_requests.post')
+    def test_empty_answer_counts_as_a_failure(self, post):
+        post.side_effect = [worker_ok(''), worker_ok('from gemini')]
+        self.assertEqual(self.post().data, {'answer': 'from gemini'})
+
+    @mock.patch('api.views.http_requests.post')
+    def test_all_failing_gives_the_same_error_the_app_already_reads(self, post):
+        post.side_effect = [failed(500), failed(503), failed(500)]
+        response = self.post()
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.data, {'error': 'AI unavailable. Try again.'})
+
+    @mock.patch('api.views.http_requests.post')
+    def test_missing_keys_are_skipped(self, post):
+        os.environ.pop('GEMINI_API_KEY')
+        post.side_effect = [failed(500), worker_ok('from deepseek')]
+        self.assertEqual(self.post().data, {'answer': 'from deepseek'})
+        self.assertEqual(len(post.call_args_list), 2)
