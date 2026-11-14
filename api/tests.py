@@ -200,6 +200,26 @@ class AskAiTests(TestCase):
         self.assertEqual(self.client.get('/admin/').status_code, 404)
 
 
+@override_settings(REST_FRAMEWORK=rates())
+class CleanerPromptTests(AskAiTests):
+    @mock.patch('api.views.http_requests.post', return_value=worker_ok())
+    def test_prompt_explains_cleaner_groups_and_tags(self, worker):
+        self.post({'question': 'What can I delete?', 'context': '[whatsappVideo] WhatsApp videos: 3 files, 1 GB.'})
+        system = worker.call_args.kwargs['json']['messages'][0]['content']
+        self.assertIn('Cleaner groups', system)
+        self.assertIn('[[cleaner:whatsappVideo]]', system)
+        self.assertIn('Never say you deleted', system)
+        user = worker.call_args.kwargs['json']['messages'][1]['content']
+        self.assertIn('[whatsappVideo] WhatsApp videos', user)
+
+    @mock.patch('api.views.http_requests.post', return_value=worker_ok())
+    def test_largest_files_list_name_matches_the_app_context(self, worker):
+        self.post()
+        system = worker.call_args.kwargs['json']['messages'][0]['content']
+        self.assertIn('"Largest files across all storage"', system)
+        self.assertNotIn('Top 10', system)
+
+
 def failed(status=500, text='upstream error'):
     response = mock.Mock(status_code=status, text=text)
     response.json.return_value = {'error': text}
